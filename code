@@ -197,9 +197,9 @@ opt_d = torch.optim.Adam(disc.parameters(), lr=1e-4)
 for img,_ in loader:
     img = img.cuda()
 
-    Id = degrade_sr(img)  # switch task here
+    Id = degrade_sr(img)  
 
-    c = EI(img)  # training condition
+    c = EI(img) 
 
     w = mapper(c)
     fusion_w = fusion(c)
