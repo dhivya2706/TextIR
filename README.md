@@ -1,8 +1,3 @@
-This is already very solid — just needs **minor polishing, consistency, and professional formatting** for a GitHub README.
-
-Below is your **fully aligned and refined version** 👇
-
----
 
 # 🚀 TextIR: Text-Guided Image Restoration Framework
 
