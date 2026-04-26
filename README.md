@@ -1,24 +1,59 @@
-🔁 Overall Workflow
-🧠 Training Phase
+🚀 TextIR: Text-Guided Image Restoration Framework
+
+📌 Full Project Overview
+TextIR is a deep learning-based image restoration system that reconstructs degraded images using text guidance. The model integrates:
+-A CNN Encoder for extracting hierarchical features
+-A StyleGAN-inspired Generator for reconstruction
+-A Fusion Module for adaptive feature blending
+-A CLIP-based conditioning mechanism to align image and text semantics
+
+The system supports three major restoration tasks:
+🔵 Super Resolution
+🔴 Inpainting
+🟡 Colorization
+
+✨ Key Features
+✅ Text-guided image restoration
+✅ Multi-task support (SR, Inpainting, Colorization)
+✅ Style-based generation (StyleGAN2-inspired)
+✅ Adaptive feature fusion (learned weights)
+✅ CLIP-based semantic conditioning
+✅ End-to-end trainable pipeline
+✅ React-compatible inference (via Python scripts)
+
+🛠️ Technologies Used
+🔹 Core Frameworks
+        PyTorch
+        Torchvision
+🔹 Models & Libraries  
+        CLIP ViT-B/32
+        Transformers
+🔹 Image Processing
+        OpenCV
+        Pillow
+		
+🔁 System Workflow
+🧠 Training Pipeline
 Ground Truth Image (I_gt)
         ↓
 Apply Degradation → I_d
         ↓
-Encoder → multi-scale features (f₀ … fₗ)
+Encoder → Multi-scale features (f₀ … fₗ)
         ↓
-CLIP Image Encoder → c = E_I(I_gt)
+CLIP Image Encoder → c
         ↓
 Style Mapping → w
         ↓
-Fusion Module → α (feature weights)
+Fusion Module → α
         ↓
 Generator (StyleConv + skip fusion)
         ↓
 Restored Image → I_r
-🧠 Inference Phase
+
+🚀 Inference Pipeline
 Degraded Image (I_d) + Text Prompt
         ↓
-CLIP Text Encoder → c = E_T(text)
+CLIP Text Encoder → c
         ↓
 Style Mapping → w
         ↓
@@ -27,323 +62,8 @@ Fusion Module → α
 Generator
         ↓
 Restored Image (I_r)
-🧩 Core Components & Formulations
-🔹 1. Conditional Embedding (CLIP)
 
-Training:
-
-c=E
-I
-	​
-
-(I
-gt
-	​
-
-)
-
-Inference:
-
-c=E
-T
-	​
-
-(text)
-🔹 2. Style Mapping
-
-The conditional embedding is transformed into style codes:
-
-w=Reshape(FC(c))
-w∈R
-L×d
-One style vector per generator layer
-🔹 3. Style Modulated Convolution (StyleConv)
-
-Each convolution is modulated using style vector w:
-
-Modulation:
-W
-^
-=W⋅(s+1)
-Demodulation:
-W
-^
-′
-=
-∑
-W
-^
-2
-+ϵ
-	​
-
-W
-^
-	​
-
-Convolution:
-y=Conv(x,
-W
-^
-′
-)
-🔹 4. Generator (Multi-layer)
-g
-i
-	​
-
-={
-StyleConv(f
-l
-	​
-
-,w
-i
-	​
-
-),
-StyleConv(StyleConv(↑
-2
-	​
-
-(x
-i−1
-	​
-
-),w
-i
-1
-	​
-
-),w
-i
-2
-	​
-
-),
-	​
-
-i=0
-i>0
-	​
-
-↑
-2
-	​
-
- = 2× upsampling
-🔹 5. Feature Fusion (Key Contribution)
-
-Fusion weights computed from condition:
-
-α=MLP(c)
-
-Split into:
-
-α
-i
-enc
-	​
-
-,α
-i
-gen
-	​
-
-
-Normalize:
-
-α=
-α
-1
-2
-	​
-
-+α
-2
-2
-	​
-
-+ϵ
-	​
-
-∣α∣
-	​
-
-
-Final fusion:
-
-x
-i
-	​
-
-=α
-i
-enc
-	​
-
-⋅f
-l−i
-	​
-
-+α
-i
-gen
-	​
-
-⋅g
-i
-	​
-
-🎯 Degradation Models
-🔵 Super Resolution
-I
-d
-	​
-
-=Upsample(Downsample(I
-gt
-	​
-
-))
-🔴 Inpainting
-I
-d
-	​
-
-=I
-gt
-	​
-
-⊙M
-M = random mask
-⊙ = element-wise multiplication
-🟡 Colorization
-
-Convert RGB → LAB:
-
-I
-d
-	​
-
-=L channel only
-📉 Loss Functions
-🔹 1. Adversarial Loss
-Discriminator:
-L
-adv,D
-	​
-
-=E[log(1+e
-−D(I
-gt
-	​
-
-)
-)+log(1+e
-D(G(I
-d
-	​
-
-,c))
-)]
-Generator:
-L
-adv,G
-	​
-
-=E[log(1+e
-−D(G(I
-d
-	​
-
-,c))
-)]
-🔹 2. CLIP Loss
-L
-clip
-	​
-
-=1−
-∥E
-I
-	​
-
-(I
-r
-	​
-
-)∥∥E
-I
-	​
-
-(I
-gt
-	​
-
-)∥
-E
-I
-	​
-
-(I
-r
-	​
-
-)⋅E
-I
-	​
-
-(I
-gt
-	​
-
-)
-	​
-
-🔹 3. Reconstruction Loss
-L
-L1
-	​
-
-=∥I
-r
-	​
-
-−I
-gt
-	​
-
-∥
-1
-	​
-
-🔹 Final Objective
-L
-G
-	​
-
-=L
-adv,G
-	​
-
-+λ
-clip
-	​
-
-L
-clip
-	​
-
-+λ
-L1
-	​
-
-L
-L1
-	​
-
-⚙️ Algorithm
+⚙️ Algorithms
 🧪 Training Algorithm
 for each batch:
     I_gt ← load image
@@ -357,13 +77,10 @@ for each batch:
     features ← Encoder(I_d)
     I_r ← Generator(features, w, α)
 
-    # Update Discriminator
-    L_D ← adversarial loss
-    update D
+    update Discriminator
+    update Generator using:
+        adversarial + clip + L1 loss
 
-    # Update Generator
-    L_G ← adv + clip + L1
-    update Generator, Encoder, Fusion
 🚀 Inference Algorithm
 Input: degraded image I_d, text prompt
 
@@ -376,3 +93,4 @@ features ← Encoder(I_d)
 I_r ← Generator(features, w, α)
 
 return restored image
+
