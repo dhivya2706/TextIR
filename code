@@ -1,8 +1,15 @@
-StyleConv
+
+1. Imports
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision import transforms, datasets
+from torch.utils.data import DataLoader
+from transformers import CLIPProcessor, CLIPModel
+import cv2
+import numpy as np
 
+2. StyleConv
 class StyleConv(nn.Module):
     def __init__(self, in_ch, out_ch, style_dim):
         super().__init__()
@@ -15,7 +22,6 @@ class StyleConv(nn.Module):
         style = self.style(w).view(B, 1, C, 1, 1)
         weight = self.weight.unsqueeze(0) * (style + 1)
 
-        # demodulation
         demod = torch.rsqrt((weight ** 2).sum([2,3,4]) + 1e-8)
         weight = weight * demod.view(B, -1, 1, 1, 1)
 
@@ -23,11 +29,9 @@ class StyleConv(nn.Module):
         weight = weight.view(-1, C, 3, 3)
 
         out = F.conv2d(x, weight, padding=1, groups=B)
-        out = out.view(B, -1, H, W)
+        return out.view(B, -1, H, W)
 
-        return out
-  
-Encoder (f₀ … fₗ)
+3. Encoder
 class Encoder(nn.Module):
     def __init__(self):
         super().__init__()
@@ -44,8 +48,8 @@ class Encoder(nn.Module):
             x = F.relu(l(x))
             feats.append(x)
         return feats
-  
-Fusion Module
+
+4. Fusion
 class Fusion(nn.Module):
     def __init__(self, style_dim, channels):
         super().__init__()
@@ -54,7 +58,6 @@ class Fusion(nn.Module):
 
     def forward(self, s):
         alpha = self.mlp(s)
-
         splits = torch.split(alpha, [c*2 for c in self.channels], dim=1)
 
         weights=[]
@@ -65,14 +68,11 @@ class Fusion(nn.Module):
             a2 = torch.abs(a[:,1])
 
             norm = torch.sqrt(a1**2 + a2**2 + 1e-8)
+            weights.append((a1/norm, a2/norm))
 
-            a1 = a1 / norm
-            a2 = a2 / norm
-
-            weights.append((a1,a2))
         return weights
-  
-Generator 
+
+5. Generator
 class Generator(nn.Module):
     def __init__(self, style_dim=512):
         super().__init__()
@@ -108,8 +108,8 @@ class Generator(nn.Module):
         x = self.convs[3](x, w_list[3])
 
         return torch.sigmoid(x)
-  
-Style Mapping 
+
+6. Style Mapping
 class StyleMapping(nn.Module):
     def __init__(self, in_dim=512, n_layers=4):
         super().__init__()
@@ -120,63 +120,59 @@ class StyleMapping(nn.Module):
     def forward(self,c):
         w = self.fc(c)
         return w.view(w.size(0), self.n_layers, self.dim)
-  
-CLIP 
-from transformers import CLIPProcessor, CLIPModel
 
-clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").cuda()
+7. CLIP
+device = "cuda"
+
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 def EI(img):
-    inputs = clip_processor(images=img, return_tensors="pt").to("cuda")
+    img = F.interpolate(img, size=224)
+    inputs = clip_processor(images=[i.cpu() for i in img], return_tensors="pt").to(device)
     return clip_model.get_image_features(pixel_values=inputs["pixel_values"])
 
 def ET(text):
-    inputs = clip_processor(text=text, return_tensors="pt").to("cuda")
+    inputs = clip_processor(text=text, return_tensors="pt").to(device)
     return clip_model.get_text_features(input_ids=inputs["input_ids"])
 
-LOSSES 
+8. Losses
 def adv_D(real, fake):
-    return torch.mean(torch.log(1+torch.exp(-real)) +
-                      torch.log(1+torch.exp(fake)))
+    return torch.mean(torch.log(1+torch.exp(-real)) + torch.log(1+torch.exp(fake)))
 
 def adv_G(fake):
     return torch.mean(torch.log(1+torch.exp(-fake)))
 
 def clip_loss(ir, gt):
     return 1 - F.cosine_similarity(EI(ir), EI(gt)).mean()
-  
-DEGRADATION PIPELINES 
-Super-resolution
+
+9. Degradation
 def degrade_sr(img):
-    s = torch.randint(4,64,(1,)).item()
+    s = torch.randint(2,8,(1,)).item()
     low = F.interpolate(img, scale_factor=1/s)
     return F.interpolate(low, size=img.shape[-2:])
 
-Inpainting
 def degrade_inpaint(img):
-    mask = torch.rand_like(img[:, :1]) > 0.5
+    mask = (torch.rand_like(img[:, :1]) > 0.5).float()
     return img * mask
-  
-Colorization 
-import cv2
-import numpy as np
-
-def rgb_to_lab(img):
-    img = img.cpu().numpy().transpose(1,2,0)
-    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
-    return torch.tensor(lab).permute(2,0,1)
 
 def degrade_color(img):
-    lab = rgb_to_lab(img[0])
-    L = lab[0:1]
-    return L.unsqueeze(0)
-  
-TRAIN LOOP 
-encoder = Encoder().cuda()
-generator = Generator().cuda()
-fusion = Fusion(512,[256,128,64]).cuda()
-mapper = StyleMapping().cuda()
+    gray = img.mean(dim=1, keepdim=True)
+    return gray.repeat(1,3,1,1)
+
+10. Dataset Loader
+transform = transforms.Compose([
+    transforms.Resize((128,128)),
+    transforms.ToTensor()
+])
+dataset = datasets.ImageFolder("data/", transform=transform)
+loader = DataLoader(dataset, batch_size=16, shuffle=True)
+
+11. Models + Optimizers
+encoder = Encoder().to(device)
+generator = Generator().to(device)
+fusion = Fusion(512,[256,128,64]).to(device)
+mapper = StyleMapping().to(device)
 
 disc = nn.Sequential(
     nn.Conv2d(3,64,4,2,1),
@@ -184,43 +180,53 @@ disc = nn.Sequential(
     nn.Conv2d(64,128,4,2,1),
     nn.LeakyReLU(0.2),
     nn.Conv2d(128,1,4)
-).cuda()
+).to(device)
 
 opt_g = torch.optim.Adam(
     list(generator.parameters())+
     list(encoder.parameters())+
     list(fusion.parameters())+
-    list(mapper.parameters()), lr=1e-4)
+    list(mapper.parameters()), lr=2e-4)
 
-opt_d = torch.optim.Adam(disc.parameters(), lr=1e-4)
+opt_d = torch.optim.Adam(disc.parameters(), lr=2e-4)
 
-for img,_ in loader:
-    img = img.cuda()
+12. Training Loop
+for epoch in range(10):
+    for img,_ in loader:
+        img = img.to(device)
 
-    Id = degrade_sr(img)  
+        Id = degrade_sr(img)
+        c = EI(img)
 
-    c = EI(img) 
+        w = mapper(c)
+        fw = fusion(c)
 
-    w = mapper(c)
-    fusion_w = fusion(c)
+        feats = encoder(Id)
+        fake = generator(feats, w.unbind(1), fw)
 
-    feats = encoder(Id)
-    fake = generator(feats, w.unbind(1), fusion_w)
+        # D
+        loss_d = adv_D(disc(img), disc(fake.detach()))
+        opt_d.zero_grad()
+        loss_d.backward()
+        opt_d.step()
 
-    # D
-    loss_d = adv_D(disc(img), disc(fake.detach()))
-    opt_d.zero_grad(); loss_d.backward(); opt_d.step()
+        # G
+        loss_g = adv_G(disc(fake)) + 0.01*clip_loss(fake,img) + F.l1_loss(fake,img)
 
-    # G
-    loss_g = (
-        adv_G(disc(fake)) +
-        0.01 * clip_loss(fake, img) +
-        1.0 * F.l1_loss(fake, img)
-    )
+        opt_g.zero_grad()
+        loss_g.backward()
+        opt_g.step()
 
-    opt_g.zero_grad(); loss_g.backward(); opt_g.step()
-  
-FINAL INFERENCE 
+    print(f"Epoch {epoch} done")
+
+13. Save Models
+torch.save(generator.state_dict(), "gen.pth")
+torch.save(encoder.state_dict(), "enc.pth")
+torch.save(fusion.state_dict(), "fusion.pth")
+torch.save(mapper.state_dict(), "mapper.pth")
+torch.save(disc.state_dict(), "disc.pth")
+
+14. Inference Functions
 def infer_sr(img, text):
     Id = degrade_sr(img)
     c = ET([text])
