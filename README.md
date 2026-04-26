@@ -1,9 +1,12 @@
 # 🧠 TextIR – Text-Guided Image Restoration
 
-TextIR is a deep learning project that restores low-quality images using text guidance.  
-It combines Diffusion Models and CLIP to generate high-quality images that match both visual input and semantic meaning.
-
-
+🔷 Overview
+This project implements a text-guided image restoration framework inspired by modern conditional generative models. The system restores degraded images using:
+- A CNN Encoder for feature extraction
+- A Style-modulated Generator (StyleGAN2-inspired)
+- A Fusion module for adaptive feature blending
+- A CLIP-based conditioning mechanism for aligning image-text semantics
+  
 ## 🚀 Features
 - 🖼️ Restore low-resolution and noisy images
 - ✨ Text-guided enhancement (user-controlled output)
