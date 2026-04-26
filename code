@@ -1,0 +1,246 @@
+StyleConv
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class StyleConv(nn.Module):
+    def __init__(self, in_ch, out_ch, style_dim):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(out_ch, in_ch, 3, 3))
+        self.style = nn.Linear(style_dim, in_ch)
+
+    def forward(self, x, w):
+        B, C, H, W = x.shape
+
+        style = self.style(w).view(B, 1, C, 1, 1)
+        weight = self.weight.unsqueeze(0) * (style + 1)
+
+        # demodulation
+        demod = torch.rsqrt((weight ** 2).sum([2,3,4]) + 1e-8)
+        weight = weight * demod.view(B, -1, 1, 1, 1)
+
+        x = x.view(1, -1, H, W)
+        weight = weight.view(-1, C, 3, 3)
+
+        out = F.conv2d(x, weight, padding=1, groups=B)
+        out = out.view(B, -1, H, W)
+
+        return out
+  
+Encoder (f₀ … fₗ)
+class Encoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            nn.Conv2d(3,64,4,2,1),
+            nn.Conv2d(64,128,4,2,1),
+            nn.Conv2d(128,256,4,2,1),
+            nn.Conv2d(256,512,4,2,1),
+        ])
+
+    def forward(self,x):
+        feats=[]
+        for l in self.layers:
+            x = F.relu(l(x))
+            feats.append(x)
+        return feats
+  
+Fusion Module
+class Fusion(nn.Module):
+    def __init__(self, style_dim, channels):
+        super().__init__()
+        self.mlp = nn.Linear(style_dim, sum([c*2 for c in channels]))
+        self.channels = channels
+
+    def forward(self, s):
+        alpha = self.mlp(s)
+
+        splits = torch.split(alpha, [c*2 for c in self.channels], dim=1)
+
+        weights=[]
+        for a,c in zip(splits,self.channels):
+            a = a.view(a.size(0),2,c)
+
+            a1 = torch.abs(a[:,0])
+            a2 = torch.abs(a[:,1])
+
+            norm = torch.sqrt(a1**2 + a2**2 + 1e-8)
+
+            a1 = a1 / norm
+            a2 = a2 / norm
+
+            weights.append((a1,a2))
+        return weights
+  
+Generator 
+class Generator(nn.Module):
+    def __init__(self, style_dim=512):
+        super().__init__()
+
+        self.up = nn.Upsample(scale_factor=2, mode='bilinear')
+
+        self.convs = nn.ModuleList([
+            StyleConv(512,256,style_dim),
+            StyleConv(256,128,style_dim),
+            StyleConv(128,64,style_dim),
+            StyleConv(64,3,style_dim)
+        ])
+
+    def forward(self, feats, w_list, fusion_w):
+
+        f0,f1,f2,f3 = feats[::-1]
+
+        x = self.convs[0](f3, w_list[0])
+
+        x = self.up(x)
+        a1,a2 = fusion_w[0]
+        x = a1.unsqueeze(-1).unsqueeze(-1)*f2 + a2.unsqueeze(-1).unsqueeze(-1)*x
+        x = self.convs[1](x, w_list[1])
+
+        x = self.up(x)
+        a1,a2 = fusion_w[1]
+        x = a1.unsqueeze(-1).unsqueeze(-1)*f1 + a2.unsqueeze(-1).unsqueeze(-1)*x
+        x = self.convs[2](x, w_list[2])
+
+        x = self.up(x)
+        a1,a2 = fusion_w[2]
+        x = a1.unsqueeze(-1).unsqueeze(-1)*f0 + a2.unsqueeze(-1).unsqueeze(-1)*x
+        x = self.convs[3](x, w_list[3])
+
+        return torch.sigmoid(x)
+  
+Style Mapping 
+class StyleMapping(nn.Module):
+    def __init__(self, in_dim=512, n_layers=4):
+        super().__init__()
+        self.fc = nn.Linear(in_dim, in_dim*n_layers)
+        self.n_layers = n_layers
+        self.dim = in_dim
+
+    def forward(self,c):
+        w = self.fc(c)
+        return w.view(w.size(0), self.n_layers, self.dim)
+  
+CLIP 
+from transformers import CLIPProcessor, CLIPModel
+
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").cuda()
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+def EI(img):
+    inputs = clip_processor(images=img, return_tensors="pt").to("cuda")
+    return clip_model.get_image_features(pixel_values=inputs["pixel_values"])
+
+def ET(text):
+    inputs = clip_processor(text=text, return_tensors="pt").to("cuda")
+    return clip_model.get_text_features(input_ids=inputs["input_ids"])
+
+LOSSES 
+def adv_D(real, fake):
+    return torch.mean(torch.log(1+torch.exp(-real)) +
+                      torch.log(1+torch.exp(fake)))
+
+def adv_G(fake):
+    return torch.mean(torch.log(1+torch.exp(-fake)))
+
+def clip_loss(ir, gt):
+    return 1 - F.cosine_similarity(EI(ir), EI(gt)).mean()
+  
+DEGRADATION PIPELINES 
+Super-resolution
+def degrade_sr(img):
+    s = torch.randint(4,64,(1,)).item()
+    low = F.interpolate(img, scale_factor=1/s)
+    return F.interpolate(low, size=img.shape[-2:])
+
+Inpainting
+def degrade_inpaint(img):
+    mask = torch.rand_like(img[:, :1]) > 0.5
+    return img * mask
+  
+Colorization 
+import cv2
+import numpy as np
+
+def rgb_to_lab(img):
+    img = img.cpu().numpy().transpose(1,2,0)
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+    return torch.tensor(lab).permute(2,0,1)
+
+def degrade_color(img):
+    lab = rgb_to_lab(img[0])
+    L = lab[0:1]
+    return L.unsqueeze(0)
+  
+TRAIN LOOP 
+encoder = Encoder().cuda()
+generator = Generator().cuda()
+fusion = Fusion(512,[256,128,64]).cuda()
+mapper = StyleMapping().cuda()
+
+disc = nn.Sequential(
+    nn.Conv2d(3,64,4,2,1),
+    nn.LeakyReLU(0.2),
+    nn.Conv2d(64,128,4,2,1),
+    nn.LeakyReLU(0.2),
+    nn.Conv2d(128,1,4)
+).cuda()
+
+opt_g = torch.optim.Adam(
+    list(generator.parameters())+
+    list(encoder.parameters())+
+    list(fusion.parameters())+
+    list(mapper.parameters()), lr=1e-4)
+
+opt_d = torch.optim.Adam(disc.parameters(), lr=1e-4)
+
+for img,_ in loader:
+    img = img.cuda()
+
+    Id = degrade_sr(img)  # switch task here
+
+    c = EI(img)  # training condition
+
+    w = mapper(c)
+    fusion_w = fusion(c)
+
+    feats = encoder(Id)
+    fake = generator(feats, w.unbind(1), fusion_w)
+
+    # D
+    loss_d = adv_D(disc(img), disc(fake.detach()))
+    opt_d.zero_grad(); loss_d.backward(); opt_d.step()
+
+    # G
+    loss_g = (
+        adv_G(disc(fake)) +
+        0.01 * clip_loss(fake, img) +
+        1.0 * F.l1_loss(fake, img)
+    )
+
+    opt_g.zero_grad(); loss_g.backward(); opt_g.step()
+  
+FINAL INFERENCE 
+def infer_sr(img, text):
+    Id = degrade_sr(img)
+    c = ET([text])
+    w = mapper(c)
+    fw = fusion(c)
+    feats = encoder(Id)
+    return generator(feats, w.unbind(1), fw)
+
+def infer_color(gray, text):
+    gray = gray.repeat(1,3,1,1)
+    c = ET([text])
+    w = mapper(c)
+    fw = fusion(c)
+    feats = encoder(gray)
+    return generator(feats, w.unbind(1), fw)
+
+def infer_inpaint(img, mask, text):
+    Id = img * mask
+    c = ET([text])
+    w = mapper(c)
+    fw = fusion(c)
+    feats = encoder(Id)
+    return generator(feats, w.unbind(1), fw)
