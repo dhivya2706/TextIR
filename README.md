@@ -2,7 +2,7 @@
 
 ## 🚀 Live Project
 Check out the live app here:  
-👉 [Live Demo]((https://unified-ir.netlify.app/))
+👉 [Live Demo](https://unified-ir.netlify.app/)
 
 🔷 Overview
 This project implements a text-guided image restoration framework inspired by modern conditional generative models. The system restores degraded images using:
